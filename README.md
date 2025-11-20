@@ -113,7 +113,7 @@ CASA implements the following algorithms from:
 
 - **MCMC - Uniform, Priority, Restart**  
   _Constrained Sampling for Language Models Should Be Easy: An MCMC Perspective_  
-  NeurIPS 2026 | [arXiv:2506.05754](https://arxiv.org/abs/2506.05754)
+  NeurIPS 2025 | [arXiv:2506.05754](https://arxiv.org/abs/2506.05754)
 
 ## License
 
