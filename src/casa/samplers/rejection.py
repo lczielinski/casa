@@ -33,6 +33,8 @@ class RS(BaseSampler):
     ) -> List[SamplingResult]:
         prompt_ids = self._encode_prompt(prompt)
         results = []
+        # ARS/CARS: each accepted program is masked out and never proposed again.
+        dedup = self.learn_level >= 2
 
         logits_processor = OracleLogitsProcessor(
             tokenizer=self.llm.tokenizer,
@@ -55,6 +57,9 @@ class RS(BaseSampler):
                         ).strip()
                         print(f"[reject] {rejected}", flush=True)
                     continue
+
+                if dedup:
+                    logits_processor.remove_generated()
 
                 result.n_attempts = n_attempts
                 results.append(result)

@@ -134,6 +134,13 @@ class OracleLogitsProcessor(LogitsProcessor):
 
         return self.get_logprob()
 
+    def remove_generated(self) -> None:
+        """Exclude the most recent generation from all future proposals."""
+        assert len(self.generated_tokens) == self.oracle_node_depth + 1
+        assert self.oracle_node.log_theta is not None
+        self.oracle_node.log_theta[0, self.generated_tokens[-1]] = -float('inf')
+        self._recompute_in_trie()
+
     def get_logprob(self) -> torch.Tensor:
         """Sum the cached raw logprobs along the path to the current node."""
         assert len(self.generated_tokens) == self.oracle_node_depth + 1
