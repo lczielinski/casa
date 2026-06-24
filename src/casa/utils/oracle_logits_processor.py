@@ -27,14 +27,16 @@ class OracleLogitsProcessor(LogitsProcessor):
         grammar_constraint,
         device: torch.device,
         learn_level: int = 3,
-        constrain_first: bool = False
+        constrain_first: bool = False,
+        temperature: float = 1.0,
     ):
         self.tokenizer = tokenizer
         self.grammar_constraint = grammar_constraint
         self.learn_level = learn_level
         self.constrain_first = constrain_first
         self.device = device
-        
+        self.temperature = temperature
+
         self.oracle_trie = Trie()
         self.current_index: Optional[int] = None
         self.reset()
@@ -64,7 +66,14 @@ class OracleLogitsProcessor(LogitsProcessor):
             Adjusted logits with grammar constraints applied.
         """
         start_time = time.time()
-        
+
+        # Bake the sampling temperature in here (generation itself runs at T=1) so the
+        # trie's recorded log-probs, the log_theta adjustment, and the distribution
+        # actually sampled all share one space — otherwise a downstream warper would
+        # divide log_theta by T and corrupt the mass accounting.
+        if self.temperature != 1.0:
+            scores = scores / self.temperature
+
         self._set_generated_tokens(input_ids)
         is_root = len(self.generated_tokens) == 0
         

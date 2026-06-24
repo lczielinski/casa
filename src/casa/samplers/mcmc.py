@@ -1,6 +1,5 @@
-import time
 from dataclasses import dataclass
-from typing import List, Optional, Literal, Union
+from typing import List, Optional, Literal, Union, Callable
 import numpy as np
 import torch
 from transformers import GenerationConfig
@@ -87,6 +86,9 @@ class MCMC(BaseSampler):
         variant: Literal["uniform", "priority", "restart"] = "uniform",
         max_new_tokens: int = 512,
         verbose: bool = False,
+        temperature: float = 1.0,
+        energy_fn: Optional[Callable[[str], float]] = None,
+        energy_temperature: float = 1.0,
     ):
         """Initialize MCMC sampler.
 
@@ -97,6 +99,15 @@ class MCMC(BaseSampler):
             max_new_tokens: Maximum tokens to generate.
             verbose: If True, print each chain's proposals and accept/reject decisions
                 as they are sampled.
+            temperature: Proposal sampling temperature; >1 makes the LLM propose more
+                varied programs. In model-based mode it also flattens the target to
+                p_model^(1/T); in energy mode it only affects proposals.
+            energy_fn: Optional objective over a program's *text* (lower = better),
+                e.g. its rounding error. When given, the chain searches for low-energy
+                programs (simulated annealing) instead of sampling the model, and each
+                chain returns the best (lowest-energy) program it found.
+            energy_temperature: Annealing temperature for energy mode; larger explores
+                more (accepts worse moves more often), smaller is greedier. default 1.0.
         """
         super().__init__(llm, grammar, max_new_tokens)
 
@@ -107,6 +118,9 @@ class MCMC(BaseSampler):
 
         self.variant = variant
         self.verbose = verbose
+        self.temperature = temperature
+        self.energy_fn = energy_fn
+        self.energy_temperature = energy_temperature
 
     def _filter_generated_text(self, generated_ids):
         if generated_ids[0][-1] == self.llm.tokenizer.eos_token_id:
@@ -176,13 +190,16 @@ class MCMC(BaseSampler):
             If return_steps=False: List of final sampling results (length n_samples).
             If return_steps=True: List of step lists, one per chain (length n_samples * n_steps MCMCStep objects).
         """
+        if self.energy_fn is not None:
+            return self._sample_energy(prompt, n_samples, n_steps)
+
         prompt_ids = self._encode_prompt(prompt)
-        
+
         if return_steps:
             all_chains = []
         else:
             final_results = []
-        
+
         for sample_idx in range(n_samples):
             current_ids, current_scores = self._generate_constrained(
                 prompt_ids=prompt_ids,
@@ -227,7 +244,7 @@ class MCMC(BaseSampler):
                     )
                     
                     log_accept_ratio = (
-                        proposal_raw_logprob - current_raw_logprob +
+                        (proposal_raw_logprob - current_raw_logprob) / self.temperature +
                         reverse_logprob - forward_logprob
                     )
                     acceptance_prob = min(1.0, np.exp(log_accept_ratio))
@@ -270,7 +287,82 @@ class MCMC(BaseSampler):
                 ))
         
         return all_chains if return_steps else final_results
-    
+
+    def _sample_energy(
+        self,
+        prompt: str,
+        n_samples: int,
+        n_steps: int,
+    ) -> List[SamplingResult]:
+        """Energy-driven search: simulated annealing over `self.energy_fn` (lower =
+        better), using the grammar-constrained LLM as the proposal. Each step keeps the
+        current program, proposes an edited equivalent, and accepts it with probability
+        min(1, exp(-(E_proposal - E_current) / energy_temperature)) — so the chain drifts
+        toward low-energy programs while occasionally accepting worse ones to escape
+        local minima. Returns each chain's best (lowest-energy) program.
+
+        Note: this is an optimizer, not a calibrated sampler of exp(-E/T) — it omits the
+        proposal-density correction, which for finding good programs is the right call.
+        Programs the energy can't score (e.g. unbounded) get +inf and are never accepted.
+        """
+        prompt_ids = self._encode_prompt(prompt)
+        results: List[SamplingResult] = []
+
+        for sample_idx in range(n_samples):
+            current_ids, current_scores = self._generate_constrained(prompt_ids, prefix_ids=None)
+            current_text = self._filter_generated_text(current_ids).strip()
+            current_energy = self.energy_fn(current_text)
+            best_ids, best_energy = current_ids, current_energy
+            if self.verbose:
+                print(f"[chain {sample_idx} init] energy={current_energy:.4g}: "
+                      f"{current_text}", flush=True)
+
+            for step in range(n_steps):
+                proposal_ids, proposal_scores, _ = self._propose_next_sequence(
+                    prompt_ids=prompt_ids,
+                    current_ids=current_ids,
+                    current_scores=current_scores,
+                )
+                proposal_text = self._filter_generated_text(proposal_ids).strip()
+
+                if torch.equal(current_ids, proposal_ids):
+                    # Identical proposal: no-op move, always "accepted".
+                    proposal_energy, acceptance_prob = current_energy, 1.0
+                else:
+                    proposal_energy = self.energy_fn(proposal_text)
+                    delta = proposal_energy - current_energy  # >0 means worse (more error)
+                    # Always take improvements; take worse moves with prob exp(-delta/tau).
+                    acceptance_prob = float(np.exp(-delta / self.energy_temperature)) if delta > 0 else 1.0
+
+                accepted = bool(np.random.rand() < acceptance_prob)
+                if self.verbose:
+                    tag = "accept" if accepted else "reject"
+                    print(f"[chain {sample_idx} step {step}] {tag} "
+                          f"energy={proposal_energy:.4g} (best={best_energy:.4g}): "
+                          f"{proposal_text}", flush=True)
+
+                if accepted:
+                    current_ids, current_scores, current_energy = (
+                        proposal_ids, proposal_scores, proposal_energy
+                    )
+                    if current_energy < best_energy:
+                        best_ids, best_energy = current_ids, current_energy
+
+            results.append(self._result_from_ids(best_ids, best_energy))
+        return results
+
+    def _result_from_ids(self, token_ids: torch.Tensor, energy: float) -> SamplingResult:
+        """Minimal SamplingResult for energy mode (carries the program text + energy)."""
+        ids = token_ids[0].tolist()
+        return SamplingResult(
+            tokens=[self.llm.tokenizer.decode([t]) for t in ids],
+            token_ids=ids,
+            text=self._filter_generated_text(token_ids),
+            raw_logprob=0.0,
+            success=True,
+            energy=energy,
+        )
+
     def _create_result_with_logprobs(
         self,
         token_ids: torch.Tensor,
@@ -307,17 +399,20 @@ class MCMC(BaseSampler):
         Returns:
             Tuple of (generated_ids, scores).
         """
+        # temperature applies to proposals; output.scores reflect it, so the proposal
+        # log-probs used in the MH ratio stay consistent with how proposals are drawn.
         generation_config = GenerationConfig(
             max_new_tokens=self.max_new_tokens,
             num_return_sequences=1,
             do_sample=True,
+            temperature=self.temperature,
             eos_token_id=self.llm.tokenizer.eos_token_id,
             pad_token_id=self.llm.tokenizer.eos_token_id,
             return_dict_in_generate=True,
             output_scores=True,
             top_k=None,
         )
-        
+
         # Setup grammar constraint
         self.grammar.reset()
         grammar_processor = GrammarLogitsProcessor(
@@ -511,41 +606,3 @@ class MCMC(BaseSampler):
             )
         
         return proposal_logprob
-    
-    def _compute_sequence_logprob(
-        self,
-        prompt_ids: torch.Tensor,
-        query_ids: torch.Tensor,
-    ) -> float:
-        """Compute exact log probability of a sequence.
-        
-        Args:
-            prompt_ids: Encoded prompt.
-            query_ids: Sequence to compute probability for.
-            
-        Returns:
-            Log probability.
-        """
-        # Use restrictor to force generation and collect log probs
-        generation_config = GenerationConfig(
-            max_new_tokens=query_ids.shape[1],
-            num_return_sequences=1,
-            do_sample=False,
-            eos_token_id=self.llm.tokenizer.eos_token_id,
-            pad_token_id=self.llm.tokenizer.eos_token_id,
-        )
-        
-        restrictor = _RestrictorLogitsProcessor(
-            prompt_ids.size(1),
-            query_ids[0],
-        )
-        logits_processor_list = LogitsProcessorList([restrictor])
-        
-        self.llm.model.generate(
-            prompt_ids,
-            generation_config=generation_config,
-            tokenizer=self.llm.tokenizer,
-            logits_processor=logits_processor_list,
-        )
-        
-        return restrictor.result.sum().item()

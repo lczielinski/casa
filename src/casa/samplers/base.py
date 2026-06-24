@@ -16,6 +16,8 @@ class SamplingResult:
         raw_logprob: Raw log probability from the model.
         constrained_logprob: Log probability under grammar constraints.
         success: Whether the sample satisfied constraints.
+        energy: Objective value when sampling targets a custom energy (lower = better),
+            e.g. a program's rounding error; None for model-based sampling.
     """
     tokens: List[str]
     token_ids: List[int]
@@ -24,6 +26,7 @@ class SamplingResult:
     constrained_logprob: Optional[float] = None
     success: bool = True
     attempts: int = 1
+    energy: Optional[float] = None
 
 
 class BaseSampler(ABC):
