@@ -86,23 +86,27 @@ class MCMC(BaseSampler):
         grammar,
         variant: Literal["uniform", "priority", "restart"] = "uniform",
         max_new_tokens: int = 512,
+        verbose: bool = False,
     ):
         """Initialize MCMC sampler.
-        
+
         Args:
             llm: LLM instance.
             grammar: Grammar instance.
             variant: MCMC proposal strategy.
             max_new_tokens: Maximum tokens to generate.
+            verbose: If True, print each chain's proposals and accept/reject decisions
+                as they are sampled.
         """
         super().__init__(llm, grammar, max_new_tokens)
-        
+
         if variant not in ["uniform", "priority", "restart"]:
             raise ValueError(
                 f"Invalid variant '{variant}'. Must be 'uniform', 'priority', or 'restart'."
             )
-        
+
         self.variant = variant
+        self.verbose = verbose
 
     def _filter_generated_text(self, generated_ids):
         if generated_ids[0][-1] == self.llm.tokenizer.eos_token_id:
@@ -184,14 +188,18 @@ class MCMC(BaseSampler):
                 prompt_ids=prompt_ids,
                 prefix_ids=None,
             )
-            
+
             current_cons_logprob = self._compute_sequence_logprob_constrained(
                 current_scores, current_ids
             )
             current_raw_logprob = self._compute_sequence_logprob_unconstrained(
                 prompt_ids, current_ids
             )
-            
+
+            if self.verbose:
+                print(f"[chain {sample_idx} init] "
+                      f"{self._filter_generated_text(current_ids).strip()}", flush=True)
+
             chain_steps = [] if return_steps else None
             
             for step in range(n_steps):
@@ -225,7 +233,14 @@ class MCMC(BaseSampler):
                     acceptance_prob = min(1.0, np.exp(log_accept_ratio))
                 
                 accepted = bool(np.random.rand() < acceptance_prob)
-                
+
+                if self.verbose:
+                    tag = "accept" if accepted else "reject"
+                    print(f"[chain {sample_idx} step {step}] {tag} "
+                          f"p={acceptance_prob:.2f}: "
+                          f"{self._filter_generated_text(proposal_ids).strip()}",
+                          flush=True)
+
                 if return_steps:
                     current_result = self._create_result_with_logprobs(
                         current_ids, prompt_ids, current_raw_logprob, current_cons_logprob

@@ -10,7 +10,6 @@ from transformers.generation.logits_process import (
 from casa.samplers.base import BaseSampler, SamplingResult
 from casa.utils.oracle_logits_processor import OracleLogitsProcessor
 from casa.utils.scoring import get_seq_logprob_from_scores
-from casa.utils.helpers import print_progress
 
 class RS(BaseSampler):
     """Rejection Sampling (RS).
@@ -62,28 +61,31 @@ class RS(BaseSampler):
             constrain_first=self.constrain_first,
         )
         for sample_idx in range(n_samples):
-            n_attempts = 0
             success = False
-            
-            for attempt in range(max_attempts):
-                n_attempts += 1
-                
+
+            for n_attempts in range(1, max_attempts + 1):
                 try:
                     result = self._generate_one(prompt_ids, logits_processor)
-                    result.n_attempts = n_attempts
-                    results.append(result)
-                    print_progress(sample_idx + 1, n_samples, n_attempts, max_attempts, self.verbose, timeout=False)
-                    
-                    success = True
-                    break 
-                    
                 except ValueError:
+                    # Off-grammar: the processor still holds the rejected tokens.
+                    if self.verbose:
+                        rejected = self.llm.tokenizer.decode(
+                            logits_processor.generated_tokens, skip_special_tokens=True
+                        ).strip()
+                        print(f"[reject] {rejected}", flush=True)
                     continue  # Try again for this sample
-            
-            if not success:
-                print_progress(sample_idx + 1, n_samples, n_attempts, max_attempts, self.verbose, timeout=True)
 
-        
+                result.n_attempts = n_attempts
+                results.append(result)
+                if self.verbose:
+                    print(f"[{len(results)}/{n_samples}] {result.text.strip()}", flush=True)
+                success = True
+                break
+
+            if not success and self.verbose:
+                print(f"[timeout] sample {sample_idx + 1}: no valid program in "
+                      f"{max_attempts} attempts", flush=True)
+
         return results
         
     def _generate_one(
