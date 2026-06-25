@@ -51,8 +51,9 @@ class OracleLogitsProcessor(LogitsProcessor):
         self._set_generated_tokens(input_ids)
         is_root = len(self.generated_tokens) == 0
 
-        if self.temperature != 1.0:
-            scores = scores / self.temperature
+        scores = scores / self.temperature if self.temperature != 1.0 else scores.clone()
+        vocab_size = self.grammar_constraint.ll_tokenizer.vocab_size
+        scores[0, vocab_size:] = float('-inf')
 
         # Advance the parser (skipped at level 1, which samples fully unconstrained).
         if self.learn_level != 1:
@@ -81,12 +82,8 @@ class OracleLogitsProcessor(LogitsProcessor):
         else:
             adjust_scores = True
 
-        scores = scores.clone()
         if adjust_scores:
             scores += self.oracle_node.log_theta.to(self.device, non_blocking=True)
-        # Forbid token ids the grammar tokenizer doesn't know about
-        vocab_size = self.grammar_constraint.ll_tokenizer.vocab_size
-        scores[0, vocab_size:] = float('-inf')
 
         if not torch.isfinite(scores[0, :vocab_size]).any():
             raise ValueError(f"No valid continuation at tokens: {self.generated_tokens}")
