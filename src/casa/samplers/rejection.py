@@ -55,7 +55,7 @@ class RS(BaseSampler):
         for sample_idx in range(n_samples):
             success = False
 
-            for n_attempts in range(1, max_attempts + 1):
+            for _ in range(1, max_attempts + 1):
                 try:
                     result = self._generate_one(prompt_ids, logits_processor)
                 except ValueError:
@@ -82,7 +82,6 @@ class RS(BaseSampler):
                         continue
                     seen.add(key)
 
-                result.n_attempts = n_attempts
                 results.append(result)
                 if self.verbose:
                     print(f"[{len(results)}/{n_samples}] {result.text.strip()}", flush=True)
@@ -237,7 +236,7 @@ class GCD(BaseSampler):
 
         for sample_idx in range(n_samples):
             success = False
-            for n_attempts in range(1, max_attempts + 1):
+            for _ in range(1, max_attempts + 1):
                 try:
                     result = self._generate_one(prompt_ids)
                 except ValueError:
@@ -247,7 +246,6 @@ class GCD(BaseSampler):
                         print("[reject] incomplete program", flush=True)
                     continue
 
-                result.n_attempts = n_attempts
                 results.append(result)
                 if self.verbose:
                     print(f"[{len(results)}/{n_samples}] {result.text.strip()}", flush=True)

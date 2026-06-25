@@ -1,7 +1,7 @@
 import os
 import json
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import torch
 from transformers import (
@@ -79,12 +79,3 @@ class LLM:
             assert isinstance(formatted, str)
             return formatted
         return prompt
-
-    def encode(self, text: str, return_tensors: str = "pt") -> torch.Tensor:
-        return self.tokenizer.encode(text, return_tensors=return_tensors)
-
-    def decode(self, token_ids: torch.Tensor) -> str:
-        return self.tokenizer.decode(token_ids, skip_special_tokens=False)
-
-    def batch_decode(self, token_ids: torch.Tensor) -> List[str]:
-        return self.tokenizer.batch_decode(token_ids, skip_special_tokens=False)

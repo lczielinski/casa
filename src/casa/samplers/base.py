@@ -15,7 +15,6 @@ class SamplingResult:
     raw_logprob: float
     constrained_logprob: Optional[float] = None
     success: bool = True
-    attempts: int = 1
 
 
 class BaseSampler(ABC):
