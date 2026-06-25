@@ -1,5 +1,5 @@
 from casa.samplers.base import BaseSampler, SamplingResult
-from casa.samplers.rejection import RS, ARS, RSFT, CARS, ASAP
+from casa.samplers.rejection import RS, ARS, RSFT, CARS, ASAP, GCD
 from casa.samplers.mcmc import MCMC
 
 __all__ = [
@@ -10,5 +10,6 @@ __all__ = [
     "RSFT",
     "CARS",
     "ASAP",
+    "GCD",
     "MCMC",
 ]

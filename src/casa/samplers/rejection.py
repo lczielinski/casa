@@ -8,6 +8,7 @@ from transformers.generation.logits_process import (
 
 from casa.samplers.base import BaseSampler, SamplingResult
 from casa.utils.oracle_logits_processor import OracleLogitsProcessor
+from casa.utils.grammar_logits_processor import GrammarLogitsProcessor
 from casa.utils.scoring import get_seq_logprob_from_scores
 
 
@@ -181,3 +182,120 @@ class ASAP(CARS):
                  temperature: float = 1.0):
         super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.constrain_all = True
+
+
+class GCD(BaseSampler):
+    """Grammar-constrained decoding (GCD).
+
+    Mask the logits to grammar-valid tokens at every step and sample, with no
+    trie, no learning, and no reweighting. Every output is grammar-valid, but the
+    distribution is the locally normalized constrained model -- biased relative to
+    the true grammar-aligned distribution that ARS/CARS/ASAP recover. This is the
+    standard baseline. Samples are drawn independently (with replacement).
+    """
+
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
+        super().__init__(llm, grammar, max_new_tokens)
+        self.verbose = verbose
+        self.temperature = temperature
+
+    def _filter_generated_text(self, generated_ids):
+        if generated_ids[0][-1] == self.llm.tokenizer.eos_token_id:
+            return self.llm.tokenizer.decode(generated_ids[0][:-1])
+        return self.llm.tokenizer.decode(generated_ids[0])
+
+    def sample(
+        self,
+        prompt: str,
+        n_samples: int = 1,
+        max_attempts: int = 100,
+    ) -> List[SamplingResult]:
+        prompt_ids = self._encode_prompt(prompt)
+        results = []
+
+        for sample_idx in range(n_samples):
+            success = False
+            for n_attempts in range(1, max_attempts + 1):
+                try:
+                    result = self._generate_one(prompt_ids)
+                except ValueError:
+                    # Only happens on truncation (hit max_new_tokens before the
+                    # grammar reached an accepting state); retry.
+                    if self.verbose:
+                        print("[reject] incomplete program", flush=True)
+                    continue
+
+                result.n_attempts = n_attempts
+                results.append(result)
+                if self.verbose:
+                    print(f"[{len(results)}/{n_samples}] {result.text.strip()}", flush=True)
+                success = True
+                break
+
+            if not success and self.verbose:
+                print(f"[timeout] sample {sample_idx + 1}: no complete program in "
+                      f"{max_attempts} attempts", flush=True)
+
+        return results
+
+    def _generate_one(self, prompt_ids: torch.Tensor) -> SamplingResult:
+        """Generate one grammar-valid program; raises ValueError if truncated."""
+        generation_config = GenerationConfig(
+            max_new_tokens=self.max_new_tokens,
+            num_return_sequences=1,
+            do_sample=True,
+            eos_token_id=self.llm.tokenizer.eos_token_id,
+            pad_token_id=self.llm.tokenizer.eos_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
+            top_k=None,
+        )
+
+        self.grammar.reset()
+        grammar_processor = GrammarLogitsProcessor(
+            tokenizer=self.llm.tokenizer,
+            grammar_constraint=self.grammar.recognizer,
+            device=self.llm.device,
+            prompt_length=len(prompt_ids[0]),
+            temperature=self.temperature,
+        )
+        logits_processor_list = LogitsProcessorList([
+            grammar_processor,
+            InfNanRemoveLogitsProcessor(),
+        ])
+
+        output = self.llm.model.generate(
+            prompt_ids,
+            attention_mask=torch.ones_like(prompt_ids),
+            generation_config=generation_config,
+            tokenizer=self.llm.tokenizer,
+            logits_processor=logits_processor_list,
+        )
+
+        generated_ids = output.sequences[:, prompt_ids.shape[1]:]
+        # EOS is grammar-masked until an accepting state, so a complete program
+        # leaves the matcher accepting; otherwise the program was truncated.
+        if not self.grammar.recognizer.ll_matcher.is_accepting():
+            raise ValueError("incomplete program")
+
+        output_scores = torch.stack(output.scores, dim=1)
+        logprob = get_seq_logprob_from_scores(
+            output_scores,
+            generated_ids,
+            self.llm.tokenizer.eos_token_id,
+        ).item()
+
+        token_ids = generated_ids[0].tolist()
+        tokens = [self.llm.tokenizer.decode([tid]) for tid in token_ids]
+        text = self._filter_generated_text(generated_ids)
+
+        # GCD has no separate unconstrained pass; report the constrained logprob.
+        return SamplingResult(
+            tokens=tokens,
+            token_ids=token_ids,
+            text=text,
+            raw_logprob=logprob,
+            constrained_logprob=logprob,
+            success=True,
+        )
