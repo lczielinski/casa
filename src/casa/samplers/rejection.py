@@ -14,11 +14,13 @@ from casa.utils.scoring import get_seq_logprob_from_scores
 class RS(BaseSampler):
     """Rejection sampling: generate, then retry on grammar violations."""
 
-    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False):
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
         super().__init__(llm, grammar, max_new_tokens)
         self.learn_level = 0
         self.constrain_first = False
         self.verbose = verbose
+        self.temperature = temperature
 
     def _filter_generated_text(self, generated_ids):
         if generated_ids[0][-1] == self.llm.tokenizer.eos_token_id:
@@ -42,6 +44,7 @@ class RS(BaseSampler):
             device=self.llm.device,
             learn_level=self.learn_level,
             constrain_first=self.constrain_first,
+            temperature=self.temperature,
         )
         for sample_idx in range(n_samples):
             success = False
@@ -136,16 +139,18 @@ class RS(BaseSampler):
 class ARS(RS):
     """Adaptive rejection sampling: learns from rejected samples."""
 
-    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False):
-        super().__init__(llm, grammar, max_new_tokens, verbose)
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
+        super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.learn_level = 2
 
 
 class RSFT(RS):
     """Rejection sampling with the first token constrained to the grammar."""
 
-    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False):
-        super().__init__(llm, grammar, max_new_tokens, verbose)
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
+        super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.learn_level = 0
         self.constrain_first = True
 
@@ -153,7 +158,8 @@ class RSFT(RS):
 class CARS(RS):
     """Constrained adaptive rejection sampling: ARS plus a constrained first token."""
 
-    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False):
-        super().__init__(llm, grammar, max_new_tokens, verbose)
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
+        super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.learn_level = 3
         self.constrain_first = True

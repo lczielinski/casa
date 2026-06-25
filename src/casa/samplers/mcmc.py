@@ -29,9 +29,11 @@ class _RestrictorLogitsProcessor(LogitsProcessor):
     Used to score a fixed sequence under the unconstrained model.
     """
 
-    def __init__(self, prompt_len: int, answer_ids: torch.LongTensor):
+    def __init__(self, prompt_len: int, answer_ids: torch.LongTensor,
+                 temperature: float = 1.0):
         self.prompt_len = prompt_len
         self.answer_ids = answer_ids
+        self.temperature = temperature
         self.result = torch.empty(len(answer_ids))
 
     def __call__(
@@ -45,7 +47,8 @@ class _RestrictorLogitsProcessor(LogitsProcessor):
         if pos > 0:
             assert input_ids[0, -1] == self.answer_ids[pos - 1]
 
-        logprobs = torch.log_softmax(scores.to(torch.get_default_dtype()), dim=-1)
+        tempered = scores / self.temperature if self.temperature != 1.0 else scores
+        logprobs = torch.log_softmax(tempered.to(torch.get_default_dtype()), dim=-1)
         self.result[pos] = logprobs[0][self.answer_ids[pos]]
 
         # Force the target token to be the only option.
@@ -73,6 +76,7 @@ class MCMC(BaseSampler):
         variant: Literal["uniform", "priority", "restart"] = "uniform",
         max_new_tokens: int = 512,
         verbose: bool = False,
+        temperature: float = 1.0,
     ):
         super().__init__(llm, grammar, max_new_tokens)
 
@@ -83,6 +87,7 @@ class MCMC(BaseSampler):
 
         self.variant = variant
         self.verbose = verbose
+        self.temperature = temperature
 
     def _filter_generated_text(self, generated_ids):
         if generated_ids[0][-1] == self.llm.tokenizer.eos_token_id:
@@ -114,7 +119,9 @@ class MCMC(BaseSampler):
             pad_token_id=self.llm.tokenizer.eos_token_id,
         )
 
-        restrictor = _RestrictorLogitsProcessor(prompt_ids.size(1), query_ids[0])
+        restrictor = _RestrictorLogitsProcessor(
+            prompt_ids.size(1), query_ids[0], temperature=self.temperature
+        )
         self.llm.model.generate(
             prompt_ids,
             generation_config=generation_config,
@@ -274,6 +281,7 @@ class MCMC(BaseSampler):
             grammar_constraint=self.grammar.recognizer,
             device=self.llm.device,
             prompt_length=len(prompt_ids[0]),
+            temperature=self.temperature,
         )
 
         logits_processor_list = LogitsProcessorList([

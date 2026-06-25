@@ -14,11 +14,13 @@ class GrammarLogitsProcessor(LogitsProcessor):
         grammar_constraint,
         device: torch.device,
         prompt_length: int,
+        temperature: float = 1.0,
     ):
         self.tokenizer = tokenizer
         self.grammar_constraint = grammar_constraint
         self.device = device
         self.prompt_length = prompt_length
+        self.temperature = temperature
 
     def __call__(
         self,
@@ -35,6 +37,8 @@ class GrammarLogitsProcessor(LogitsProcessor):
         acceptance = self.grammar_constraint.filter_vocab()
 
         scores = scores.clone()
+        if self.temperature != 1.0:
+            scores /= self.temperature
         xgrammar.apply_token_bitmask_inplace(
             scores,
             acceptance.to(scores.device, non_blocking=True),
