@@ -1,4 +1,4 @@
 - [ ] Support vLLM
-- [ ] Add ASaP
+- [x] Add ASaP
 - [ ] Add a verbose mode
 - [ ] Add authors

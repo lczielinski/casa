@@ -19,6 +19,7 @@ class RS(BaseSampler):
         super().__init__(llm, grammar, max_new_tokens)
         self.learn_level = 0
         self.constrain_first = False
+        self.constrain_all = False
         self.verbose = verbose
         self.temperature = temperature
 
@@ -44,6 +45,7 @@ class RS(BaseSampler):
             device=self.llm.device,
             learn_level=self.learn_level,
             constrain_first=self.constrain_first,
+            constrain_all=self.constrain_all,
             temperature=self.temperature,
         )
         for sample_idx in range(n_samples):
@@ -163,3 +165,19 @@ class CARS(RS):
         super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.learn_level = 3
         self.constrain_first = True
+
+
+class ASAP(CARS):
+    """Adaptive sampling with approximate futures (ASAP).
+
+    CARS, but the grammar mask is applied at every step (not just the first
+    token and revisited nodes), so only grammar-valid tokens are ever sampled
+    and every generation is good. The trie still learns expected-future
+    grammaticality, reweighting the constrained proposal toward the true
+    grammar-aligned distribution.
+    """
+
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
+        super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
+        self.constrain_all = True

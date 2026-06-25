@@ -11,8 +11,10 @@ class OracleLogitsProcessor(LogitsProcessor):
 
     The trie caches per-prefix model logprobs and learned constraint masks
     (log_theta) across attempts, enabling adaptive rejection sampling. The
-    behaviour is controlled by learn_level (how much to learn from rejections)
-    and constrain_first (whether to constrain the very first token).
+    behaviour is controlled by learn_level (how much to learn from rejections),
+    constrain_first (whether to constrain the very first token), and
+    constrain_all (whether to apply the grammar mask at every step, so every
+    generation is grammar-valid -- used by ASAP).
     """
 
     def __init__(
@@ -22,12 +24,14 @@ class OracleLogitsProcessor(LogitsProcessor):
         device: torch.device,
         learn_level: int = 3,
         constrain_first: bool = False,
+        constrain_all: bool = False,
         temperature: float = 1.0,
     ):
         self.tokenizer = tokenizer
         self.grammar_constraint = grammar_constraint
         self.learn_level = learn_level
         self.constrain_first = constrain_first
+        self.constrain_all = constrain_all
         self.temperature = temperature
         self.device = device
 
@@ -75,11 +79,16 @@ class OracleLogitsProcessor(LogitsProcessor):
             self.oracle_node.log_theta = torch.zeros(1, scores.size(1))
 
             adjust_scores = is_root and self.constrain_first
-            if self.learn_level >= 3 or adjust_scores:
+            if self.learn_level >= 3 or adjust_scores or self.constrain_all:
                 acceptance = self.grammar_constraint.filter_vocab()
                 xgrammar.apply_token_bitmask_inplace(self.oracle_node.log_theta, acceptance)
                 self.recompute_needed = True
         else:
+            adjust_scores = True
+
+        # ASAP: apply the grammar mask (now baked into log_theta) at every step, so
+        # only grammar-valid tokens are ever sampled and every output is good.
+        if self.constrain_all:
             adjust_scores = True
 
         if adjust_scores:
