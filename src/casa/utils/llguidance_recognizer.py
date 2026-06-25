@@ -11,7 +11,13 @@ class LlguidanceTokenRecognizer:
         ll_grammar = llguidance.grammar_from("grammar", grammar_str)
         self.ll_tokenizer = llguidance.hf.from_tokenizer(tokenizer)
 
-        err = llguidance.LLMatcher.validate_grammar(ll_grammar, self.ll_tokenizer)
+        limits = llguidance.LLParserLimits(
+            max_items_in_row=int(os.environ.get("CASA_MAX_ITEMS_IN_ROW", "200000")),
+        )
+
+        err = llguidance.LLMatcher.validate_grammar(
+            ll_grammar, self.ll_tokenizer, limits=limits
+        )
         if err:
             raise ValueError(f"Grammar error: {err}")
 
@@ -20,6 +26,7 @@ class LlguidanceTokenRecognizer:
             self.ll_tokenizer,
             ll_grammar,
             log_level=log_level,
+            limits=limits,
         )
 
         self.current_index = 0

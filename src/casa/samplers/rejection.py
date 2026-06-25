@@ -37,8 +37,11 @@ class RS(BaseSampler):
     ) -> List[SamplingResult]:
         prompt_ids = self._encode_prompt(prompt)
         results = []
-        # ARS/CARS: each accepted program is masked out and never proposed again.
+        # ARS/CARS/ASAP: each accepted program is masked out and never proposed
+        # again. remove_generated() masks the exact token path; `seen` additionally
+        # dedups on canonical text
         dedup = self.learn_level >= 2
+        seen: set[str] = set()
 
         logits_processor = OracleLogitsProcessor(
             tokenizer=self.llm.tokenizer,
@@ -56,16 +59,28 @@ class RS(BaseSampler):
                 try:
                     result = self._generate_one(prompt_ids, logits_processor)
                 except ValueError:
+                    gen = logits_processor.generated_tokens
+                    if dedup and (gen is None or len(gen) == 0):
+                        if self.verbose:
+                            print(f"[exhausted] {len(results)} distinct program(s)",
+                                  flush=True)
+                        return results
                     # Off-grammar: the processor still holds the rejected tokens.
                     if self.verbose:
                         rejected = self.llm.tokenizer.decode(
-                            logits_processor.generated_tokens, skip_special_tokens=True
+                            gen, skip_special_tokens=True
                         ).strip()
                         print(f"[reject] {rejected}", flush=True)
                     continue
 
                 if dedup:
                     logits_processor.remove_generated()
+                    key = result.text.strip()
+                    if key in seen:
+                        if self.verbose:
+                            print(f"[dup] {key}", flush=True)
+                        continue
+                    seen.add(key)
 
                 result.n_attempts = n_attempts
                 results.append(result)
@@ -74,9 +89,15 @@ class RS(BaseSampler):
                 success = True
                 break
 
-            if not success and self.verbose:
-                print(f"[timeout] sample {sample_idx + 1}: no valid program in "
-                      f"{max_attempts} attempts", flush=True)
+            if not success:
+                if dedup:
+                    if self.verbose:
+                        print(f"[exhausted] {len(results)} distinct program(s); "
+                              f"none new in {max_attempts} attempts", flush=True)
+                    break
+                if self.verbose:
+                    print(f"[timeout] sample {sample_idx + 1}: no valid program in "
+                          f"{max_attempts} attempts", flush=True)
 
         return results
 
