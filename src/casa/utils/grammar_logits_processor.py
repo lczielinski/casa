@@ -1,7 +1,6 @@
 """Grammar-constrained logits processor for MCMC sampling."""
 
 import torch
-import xgrammar
 from transformers.generation.logits_process import LogitsProcessor
 
 
@@ -13,7 +12,7 @@ class GrammarLogitsProcessor(LogitsProcessor):
     
     Args:
         tokenizer: The tokenizer associated with the model.
-        grammar_constraint: Grammar constraint object from llguidance.
+        grammar_constraint: Grammar recognizer (llguidance or xgrammar backend).
         device: Device to run computations on.
         prompt_length: Length of the prompt (to track generation start).
     """
@@ -67,15 +66,15 @@ class GrammarLogitsProcessor(LogitsProcessor):
         # Get valid tokens according to grammar
         acceptance = self.grammar_constraint.filter_vocab()
         
-        # Apply token mask to scores
+        # Apply token mask to scores (engine-specific backend)
         scores = scores.clone()
-        xgrammar.apply_token_bitmask_inplace(
+        self.grammar_constraint.apply_token_bitmask(
             scores,
             acceptance.to(scores.device, non_blocking=True)
         )
-        
+
         # Mask out tokens beyond vocabulary size
-        scores[0, self.grammar_constraint.ll_tokenizer.vocab_size:] = float('-inf')
+        scores[0, self.grammar_constraint.vocab_size:] = float('-inf')
         
         return scores
     

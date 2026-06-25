@@ -1,6 +1,5 @@
 import time
 import torch
-import xgrammar
 from typing import Optional
 from transformers.generation.logits_process import LogitsProcessor
 
@@ -15,26 +14,34 @@ class OracleLogitsProcessor(LogitsProcessor):
     
     Args:
         tokenizer: The tokenizer associated with the model.
-        grammar_constraint: Grammar constraint object from xgrammar.
+        grammar_constraint: Grammar recognizer (llguidance or xgrammar backend).
         device: Device to run computations on.
         learn_level: Learning level (1-3) controlling constraint application.
         constrain_first: Whether to constrain the first token.
+        temperature: Sampling temperature applied to the model logits.
     """
-    
+
     def __init__(
         self,
         tokenizer,
         grammar_constraint,
         device: torch.device,
         learn_level: int = 3,
-        constrain_first: bool = False
+        constrain_first: bool = False,
+        temperature: float = 1.0,
     ):
         self.tokenizer = tokenizer
         self.grammar_constraint = grammar_constraint
         self.learn_level = learn_level
         self.constrain_first = constrain_first
+        self.temperature = temperature
         self.device = device
-        
+
+        # Number of *real* tokens. Some models (e.g. Qwen) pad the lm_head to a
+        # multiple of 128, so logit ids in [vocab_size, lm_head_size) are unused
+        # padding rows that must never be sampled.
+        self.vocab_size = grammar_constraint.vocab_size
+
         self.oracle_trie = Trie()
         self.current_index: Optional[int] = None
         self.reset()
@@ -64,7 +71,26 @@ class OracleLogitsProcessor(LogitsProcessor):
             Adjusted logits with grammar constraints applied.
         """
         start_time = time.time()
-        
+
+        # Bug fix (out-of-range token ids): mask padding/phantom ids beyond the real
+        # vocabulary so they can never be sampled. The grammar bitmask only covers
+        # the real vocab, leaving these ids unmasked; for adaptive samplers their
+        # probability mass blows up as legitimate paths get down-weighted, and the
+        # grammar engine then rejects it as an out-of-range token id. Mirrors the
+        # masking already done in GrammarLogitsProcessor.
+        if scores.size(-1) > self.vocab_size:
+            scores = scores.clone()
+            scores[:, self.vocab_size:] = float("-inf")
+
+        # Bug fix (temperature): the proposal is sampled at this temperature, so the
+        # recorded model log-probs (raw_logprob, below) and the returned logits must
+        # be temperature-scaled. We apply temperature here, to the model logits only
+        # (not to the log_theta grammar/adaptive corrections), and keep HF generation
+        # at temperature 1.0 -- HF's own warper would otherwise run after this
+        # processor and divide *scores + log_theta* by T, corrupting the corrections.
+        if self.temperature != 1.0:
+            scores = scores / self.temperature
+
         self._set_generated_tokens(input_ids)
         is_root = len(self.generated_tokens) == 0
         
@@ -90,7 +116,7 @@ class OracleLogitsProcessor(LogitsProcessor):
             adjust_scores = is_root and self.constrain_first
             if self.learn_level >= 3 or adjust_scores:
                 acceptance = self.grammar_constraint.filter_vocab()
-                xgrammar.apply_token_bitmask_inplace(self.oracle_node.log_theta, acceptance)
+                self.grammar_constraint.apply_token_bitmask(self.oracle_node.log_theta, acceptance)
                 self.recompute_needed = True
         else:
             adjust_scores = True
@@ -155,7 +181,7 @@ class OracleLogitsProcessor(LogitsProcessor):
         
         # Check for proper termination
         if self.generated_tokens[-1] != self.tokenizer.eos_token_id:
-            if not self.grammar_constraint.ll_matcher.is_accepting():
+            if not self.grammar_constraint.is_accepting():
                 self._generation_failed()
         
         if self.recompute_needed:
