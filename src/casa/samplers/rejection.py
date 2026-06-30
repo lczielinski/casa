@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import torch
 from transformers import GenerationConfig
 from transformers.generation.logits_process import (
@@ -31,11 +31,15 @@ class RS(BaseSampler):
 
     def sample(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         n_samples: int = 1,
         max_attempts: int = 100,
+        prompt_ids: Optional[torch.Tensor] = None,
     ) -> List[SamplingResult]:
-        prompt_ids = self._encode_prompt(prompt)
+        # prompt_ids lets a caller hand in an already-tokenized prefix (e.g. the
+        # model's own reasoning, ending at its `final` channel header) so the
+        # constrained program is generated as a continuation of it.
+        prompt_ids = self._resolve_prompt_ids(prompt, prompt_ids)
         results = []
         # ARS/CARS/ASAP: each accepted program is masked out and never proposed
         # again. remove_generated() masks the exact token path; `seen` additionally
@@ -227,11 +231,12 @@ class GCD(BaseSampler):
 
     def sample(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         n_samples: int = 1,
         max_attempts: int = 100,
+        prompt_ids: Optional[torch.Tensor] = None,
     ) -> List[SamplingResult]:
-        prompt_ids = self._encode_prompt(prompt)
+        prompt_ids = self._resolve_prompt_ids(prompt, prompt_ids)
         results = []
 
         for sample_idx in range(n_samples):

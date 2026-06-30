@@ -21,7 +21,8 @@ dependencies = [
     "numpy>=1.24.0",
     "llguidance>=0.7.0",
     "rich>=14.1.0",
-    "xgrammar>=0.1.0"
+    "xgrammar>=0.1.0",
+    "kernels>=0.12,<0.15"
 ]
 
 [project.urls]
