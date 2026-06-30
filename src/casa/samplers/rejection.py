@@ -36,9 +36,6 @@ class RS(BaseSampler):
         max_attempts: int = 100,
         prompt_ids: Optional[torch.Tensor] = None,
     ) -> List[SamplingResult]:
-        # prompt_ids lets a caller hand in an already-tokenized prefix (e.g. the
-        # model's own reasoning, ending at its `final` channel header) so the
-        # constrained program is generated as a continuation of it.
         prompt_ids = self._resolve_prompt_ids(prompt, prompt_ids)
         results = []
         # ARS/CARS/ASAP: each accepted program is masked out and never proposed
