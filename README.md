@@ -99,14 +99,14 @@ A GBNF grammar runs on both engines, making them directly comparable.
 ## Available Samplers
 
 - **CARS**: Constrained Adaptive Rejection Sampling. Exact samples from the grammar-conditioned LM distribution; learns from rejections and constrains the first token.
-- **ASAp**: Adaptive Sampling with Approximate expected futures (Grammar-Aligned Decoding). Rejection-free; the distribution of samples converges to the grammar-conditioned LM distribution across draws.
-- **GCD**: Vanilla Grammar-Constrained Decoding. Masks invalid tokens at every step. Fastest, but distorts the LM distribution.
 - **MCMC**: Markov Chain Monte Carlo sampling. Avaliable variants,
   - _Uniform_ - Randomly resamples from any position. Balances exploration with structural preservation.
   - _Priority_ - Resample higher perplexity regions first. Targets uncertain tokens for refinement.
   - _Restart_ - Generates from scratch. Independent proposals via importance sampling.
 - **ARS**: Adaptive Rejection Sampling
 - **RSFT**: Rejection Sampling with First Token constraints
+- **ASAp**: Adaptive Sampling with Approximate expected futures (Grammar-Aligned Decoding). Rejection-free; the distribution of samples converges to the grammar-conditioned LM distribution across draws.
+- **GCD**: Vanilla Grammar-Constrained Decoding. Masks invalid tokens at every step. Fastest, but distorts the LM distribution.
 - **RS**: Basic Rejection Sampling
 
 All samplers share the same interface:
