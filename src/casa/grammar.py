@@ -22,14 +22,6 @@ class Grammar:
         grammar_str: Grammar specification string.
         engine: Grammar backend ("llguidance" or "xgrammar").
         recognizer: Underlying grammar recognizer.
-
-    The ``engine`` flag selects which library performs grammar recognition and
-    token masking. Both back a common interface, with different trade-offs:
-
-    * ``"llguidance"`` (default): accepts Lark **or** GBNF grammars.
-    * ``"xgrammar"``: accepts GBNF/EBNF grammars only (``root ::= ...``).
-
-    A GBNF grammar works with either engine, which makes them directly comparable.
     """
 
     def __init__(self, grammar_str: str, tokenizer: PreTrainedTokenizer,
@@ -37,10 +29,9 @@ class Grammar:
         """Initialize grammar constraint.
 
         Args:
-            grammar_str: Grammar specification (Lark or GBNF for llguidance; GBNF
-                for xgrammar).
+            grammar_str: Grammar specification in EBNF or Lark format.
             tokenizer: Tokenizer associated with the language model.
-            engine: Grammar backend, ``"llguidance"`` or ``"xgrammar"``.
+            engine: Grammar backend, "llguidance" or "xgrammar".
         """
         self.grammar_str = grammar_str
         self.engine = engine
@@ -54,7 +45,7 @@ class Grammar:
         Args:
             path: Path to grammar file (.ebnf or .lark).
             tokenizer: Tokenizer associated with the language model.
-            engine: Grammar backend, ``"llguidance"`` or ``"xgrammar"``.
+            engine: Grammar backend, "llguidance" or "xgrammar".
 
         Returns:
             Grammar instance.
@@ -71,7 +62,7 @@ class Grammar:
         Args:
             grammar_str: Grammar specification string.
             tokenizer: Tokenizer associated with the language model.
-            engine: Grammar backend, ``"llguidance"`` or ``"xgrammar"``.
+            engine: Grammar backend, "llguidance" or "xgrammar".
 
         Returns:
             Grammar instance.

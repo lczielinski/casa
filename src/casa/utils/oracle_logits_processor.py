@@ -18,7 +18,6 @@ class OracleLogitsProcessor(LogitsProcessor):
         device: Device to run computations on.
         learn_level: Learning level (1-3) controlling constraint application.
         constrain_first: Whether to constrain the first token.
-        temperature: Sampling temperature applied to the model logits.
     """
 
     def __init__(
@@ -29,17 +28,15 @@ class OracleLogitsProcessor(LogitsProcessor):
         learn_level: int = 3,
         constrain_first: bool = False,
         temperature: float = 1.0,
+        asap: bool = False,
     ):
         self.tokenizer = tokenizer
         self.grammar_constraint = grammar_constraint
         self.learn_level = learn_level
         self.constrain_first = constrain_first
         self.temperature = temperature
+        self.asap = asap
         self.device = device
-
-        # Number of *real* tokens. Some models (e.g. Qwen) pad the lm_head to a
-        # multiple of 128, so logit ids in [vocab_size, lm_head_size) are unused
-        # padding rows that must never be sampled.
         self.vocab_size = grammar_constraint.vocab_size
 
         self.oracle_trie = Trie()
@@ -72,22 +69,10 @@ class OracleLogitsProcessor(LogitsProcessor):
         """
         start_time = time.time()
 
-        # Bug fix (out-of-range token ids): mask padding/phantom ids beyond the real
-        # vocabulary so they can never be sampled. The grammar bitmask only covers
-        # the real vocab, leaving these ids unmasked; for adaptive samplers their
-        # probability mass blows up as legitimate paths get down-weighted, and the
-        # grammar engine then rejects it as an out-of-range token id. Mirrors the
-        # masking already done in GrammarLogitsProcessor.
         if scores.size(-1) > self.vocab_size:
             scores = scores.clone()
             scores[:, self.vocab_size:] = float("-inf")
 
-        # Bug fix (temperature): the proposal is sampled at this temperature, so the
-        # recorded model log-probs (raw_logprob, below) and the returned logits must
-        # be temperature-scaled. We apply temperature here, to the model logits only
-        # (not to the log_theta grammar/adaptive corrections), and keep HF generation
-        # at temperature 1.0 -- HF's own warper would otherwise run after this
-        # processor and divide *scores + log_theta* by T, corrupting the corrections.
         if self.temperature != 1.0:
             scores = scores / self.temperature
 
@@ -113,7 +98,7 @@ class OracleLogitsProcessor(LogitsProcessor):
             self.oracle_node.raw_logprob = torch.log_softmax(scores, dim=-1).cpu()
             self.oracle_node.log_theta = torch.zeros(1, scores.size(1))
             
-            adjust_scores = is_root and self.constrain_first
+            adjust_scores = (is_root and self.constrain_first) or self.asap
             if self.learn_level >= 3 or adjust_scores:
                 acceptance = self.grammar_constraint.filter_vocab()
                 self.grammar_constraint.apply_token_bitmask(self.oracle_node.log_theta, acceptance)

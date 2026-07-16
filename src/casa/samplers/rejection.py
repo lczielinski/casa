@@ -27,14 +27,14 @@ class RS(BaseSampler):
             grammar: Grammar instance.
             max_new_tokens: Maximum tokens to generate.
             verbose: If True, display progress visualization.
-            temperature: Sampling temperature applied to the model logits.
         """
         super().__init__(llm, grammar, max_new_tokens)
         self.learn_level = 0
         self.constrain_first = False
         self.verbose = verbose
         self.temperature = temperature
-        
+        self.asap = False
+
     def _filter_generated_text(self, generated_ids):
         if generated_ids[0][-1] == self.llm.tokenizer.eos_token_id:
             return self.llm.tokenizer.decode(generated_ids[0][:-1])
@@ -64,6 +64,7 @@ class RS(BaseSampler):
             learn_level=self.learn_level,
             constrain_first=self.constrain_first,
             temperature=self.temperature,
+            asap=self.asap,
         )
         for sample_idx in range(n_samples):
             n_attempts = 0
@@ -192,14 +193,11 @@ class RSFT(RS):
 
 
 class _GenerateCARS(RS):
-    """``model.generate``-based CARS reference implementation.
-
-    This is the original generate-based path; the public :class:`casa.samplers.cars.CARS`
-    uses the faster KV-cached decoder by default and delegates here for ``fast=False``.
-    """
+    """``model.generate``-based CARS implementation, used by CARS(fast=False)."""
 
     def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
-                 temperature: float = 1.0):
+                 temperature: float = 1.0, asap: bool = False):
         super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.learn_level = 3
         self.constrain_first = True
+        self.asap = asap

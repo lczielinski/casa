@@ -66,7 +66,7 @@ class GrammarLogitsProcessor(LogitsProcessor):
         # Get valid tokens according to grammar
         acceptance = self.grammar_constraint.filter_vocab()
         
-        # Apply token mask to scores (engine-specific backend)
+        # Apply token mask to scores
         scores = scores.clone()
         self.grammar_constraint.apply_token_bitmask(
             scores,

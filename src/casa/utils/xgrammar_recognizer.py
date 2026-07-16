@@ -1,40 +1,29 @@
-"""Token recognizer using xgrammar for grammar constraints.
-
-Exposes the same interface as :class:`LlguidanceTokenRecognizer` so the two can
-be swapped behind the :class:`casa.grammar.Grammar` ``engine`` flag. Note the two
-backends accept different grammar syntaxes: llguidance accepts Lark or GBNF, while
-xgrammar accepts GBNF/EBNF only (``root ::= ...``).
-"""
-
 import xgrammar
 
 
 class XGrammarTokenRecognizer:
-    """Token recognizer using xgrammar's compiled grammar matcher.
+    """Token recognizer using xgrammar for grammar constraints.
 
     Attributes:
-        matcher: xgrammar GrammarMatcher for the compiled grammar.
-        vocab_size: Number of real tokens (for bitmask / padding handling).
-        current_index: Current token position in the consumed sequence.
+        tokenizer_info: xgrammar tokenizer wrapper.
+        matcher: xgrammar matcher for grammar validation.
+        current_index: Current token position in sequence.
     """
 
     def __init__(self, grammar_str: str, tokenizer):
         """Initialize recognizer.
 
         Args:
-            grammar_str: Grammar specification in GBNF/EBNF (``root ::= ...``).
+            grammar_str: Grammar specification in GBNF/EBNF format.
             tokenizer: HuggingFace tokenizer.
 
         Raises:
-            RuntimeError: If the grammar is invalid for xgrammar.
+            ValueError: If the tokenizer's EOS is not a registered stop token.
+            RuntimeError: If the grammar is invalid.
         """
         self.tokenizer_info = xgrammar.TokenizerInfo.from_huggingface(tokenizer)
         self.vocab_size = self.tokenizer_info.vocab_size
 
-        # xgrammar consumes EOS via its registered stop tokens (there is no separate
-        # "accept EOS when complete" fallback like llguidance has). For every standard
-        # tokenizer this is registered automatically; guard against the rare case where
-        # it is not, which would otherwise cause silent rejection of EOS-terminated samples.
         eos_token_id = getattr(tokenizer, "eos_token_id", None)
         if eos_token_id is not None and eos_token_id not in self.tokenizer_info.stop_token_ids:
             raise ValueError(
@@ -58,13 +47,13 @@ class XGrammarTokenRecognizer:
         self.current_index = 0
 
     def try_advance_token_ids(self, token_ids) -> bool:
-        """Try to advance the parser with new tokens.
+        """Try to advance parser with new tokens.
 
         Args:
-            token_ids: Token IDs to consume (the full generated sequence so far).
+            token_ids: Token IDs to consume.
 
         Returns:
-            True if all new tokens were successfully consumed.
+            True if all tokens were successfully consumed.
         """
         new_tokens = token_ids[self.current_index:].tolist()
         consumed = 0
@@ -77,14 +66,18 @@ class XGrammarTokenRecognizer:
         return consumed == len(new_tokens)
 
     def is_accepting(self) -> bool:
-        """Whether the grammar is currently in an accepting (complete) state."""
+        """Whether the grammar is currently in an accepting state."""
         return self.matcher.is_completed()
 
     def filter_vocab(self):
-        """Get bitmask of valid tokens at the current position."""
+        """Get bitmask of valid tokens at current position.
+
+        Returns:
+            Token bitmask tensor.
+        """
         self.matcher.fill_next_token_bitmask(self._grammar_bitmask, 0)
         return self._grammar_bitmask
 
     def apply_token_bitmask(self, logits, bitmask) -> None:
-        """Apply a next-token bitmask to ``logits`` in place (xgrammar backend)."""
+        """Apply a next-token bitmask to logits in place."""
         xgrammar.apply_token_bitmask_inplace(logits, bitmask)
