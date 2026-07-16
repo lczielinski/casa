@@ -1,6 +1,6 @@
 ![CASA](logo.png)
 
-Constrained aligned sampling algorithms for language models via CARS, MCMC, and rejection sampling variants.
+Constrained aligned sampling algorithms for language models via CARS, ASAp, GCD, MCMC, and rejection sampling variants.
 
 ## Installation
 
@@ -82,9 +82,25 @@ Generated samples:
  ...
 ```
 
+## Grammar Engines
+
+Grammars can be compiled with either of two backends, selected per `Grammar` via the `engine` flag:
+
+```python
+grammar = Grammar.from_string(grammar_str, llm.tokenizer, engine="llguidance")  # default
+grammar = Grammar.from_string(gbnf_str, llm.tokenizer, engine="xgrammar")
+```
+
+- `llguidance` (default): accepts Lark-style or GBNF grammars.
+- `xgrammar`: accepts GBNF/EBNF grammars only (`root ::= ...`).
+
+A GBNF grammar runs on both engines, making them directly comparable.
+
 ## Available Samplers
 
-- **CARS**: Constrained Adaptive Rejection Sampling
+- **CARS**: Constrained Adaptive Rejection Sampling. Exact samples from the grammar-conditioned LM distribution; learns from rejections and constrains the first token.
+- **ASAp**: Adaptive Sampling with Approximate expected futures (Grammar-Aligned Decoding). Rejection-free; the distribution of samples converges to the grammar-conditioned LM distribution across draws.
+- **GCD**: Vanilla Grammar-Constrained Decoding. Masks invalid tokens at every step. Fastest, but distorts the LM distribution.
 - **MCMC**: Markov Chain Monte Carlo sampling. Avaliable variants,
   - _Uniform_ - Randomly resamples from any position. Balances exploration with structural preservation.
   - _Priority_ - Resample higher perplexity regions first. Targets uncertain tokens for refinement.
@@ -92,6 +108,16 @@ Generated samples:
 - **ARS**: Adaptive Rejection Sampling
 - **RSFT**: Rejection Sampling with First Token constraints
 - **RS**: Basic Rejection Sampling
+
+All samplers share the same interface:
+
+```python
+from casa import CARS, ASAp, GCD
+
+sampler = ASAp(llm, grammar, max_new_tokens=32)
+sampler = GCD(llm, grammar, max_new_tokens=32)
+results = sampler.sample(prompt, n_samples=10)
+```
 
 ## Running Tests
 
@@ -110,6 +136,10 @@ CASA implements the following algorithms from:
 - **RS, ARS, RSFT, CARS**  
   _Constrained Adaptive Rejection Sampling_  
   Preprint | [arXiv:2510.01902](https://arxiv.org/abs/2510.01902)
+
+- **ASAp**  
+  _Grammar-Aligned Decoding_  
+  NeurIPS 2024 | [arXiv:2405.21047](https://arxiv.org/abs/2405.21047)
 
 - **MCMC - Uniform, Priority, Restart**  
   _Constrained Sampling for Language Models Should Be Easy: An MCMC Perspective_  
