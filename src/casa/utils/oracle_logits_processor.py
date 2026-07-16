@@ -1,6 +1,5 @@
 import time
 import torch
-import xgrammar
 from typing import Optional
 from transformers.generation.logits_process import LogitsProcessor
 
@@ -15,26 +14,31 @@ class OracleLogitsProcessor(LogitsProcessor):
     
     Args:
         tokenizer: The tokenizer associated with the model.
-        grammar_constraint: Grammar constraint object from xgrammar.
+        grammar_constraint: Grammar recognizer (llguidance or xgrammar backend).
         device: Device to run computations on.
         learn_level: Learning level (1-3) controlling constraint application.
         constrain_first: Whether to constrain the first token.
     """
-    
+
     def __init__(
         self,
         tokenizer,
         grammar_constraint,
         device: torch.device,
         learn_level: int = 3,
-        constrain_first: bool = False
+        constrain_first: bool = False,
+        temperature: float = 1.0,
+        asap: bool = False,
     ):
         self.tokenizer = tokenizer
         self.grammar_constraint = grammar_constraint
         self.learn_level = learn_level
         self.constrain_first = constrain_first
+        self.temperature = temperature
+        self.asap = asap
         self.device = device
-        
+        self.vocab_size = grammar_constraint.vocab_size
+
         self.oracle_trie = Trie()
         self.current_index: Optional[int] = None
         self.reset()
@@ -64,7 +68,14 @@ class OracleLogitsProcessor(LogitsProcessor):
             Adjusted logits with grammar constraints applied.
         """
         start_time = time.time()
-        
+
+        if scores.size(-1) > self.vocab_size:
+            scores = scores.clone()
+            scores[:, self.vocab_size:] = float("-inf")
+
+        if self.temperature != 1.0:
+            scores = scores / self.temperature
+
         self._set_generated_tokens(input_ids)
         is_root = len(self.generated_tokens) == 0
         
@@ -87,10 +98,10 @@ class OracleLogitsProcessor(LogitsProcessor):
             self.oracle_node.raw_logprob = torch.log_softmax(scores, dim=-1).cpu()
             self.oracle_node.log_theta = torch.zeros(1, scores.size(1))
             
-            adjust_scores = is_root and self.constrain_first
+            adjust_scores = (is_root and self.constrain_first) or self.asap
             if self.learn_level >= 3 or adjust_scores:
                 acceptance = self.grammar_constraint.filter_vocab()
-                xgrammar.apply_token_bitmask_inplace(self.oracle_node.log_theta, acceptance)
+                self.grammar_constraint.apply_token_bitmask(self.oracle_node.log_theta, acceptance)
                 self.recompute_needed = True
         else:
             adjust_scores = True
@@ -155,7 +166,7 @@ class OracleLogitsProcessor(LogitsProcessor):
         
         # Check for proper termination
         if self.generated_tokens[-1] != self.tokenizer.eos_token_id:
-            if not self.grammar_constraint.ll_matcher.is_accepting():
+            if not self.grammar_constraint.is_accepting():
                 self._generation_failed()
         
         if self.recompute_needed:

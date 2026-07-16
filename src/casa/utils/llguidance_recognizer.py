@@ -40,11 +40,20 @@ class LlguidanceTokenRecognizer:
         )
         
         self.current_index = 0
+        self.vocab_size = self.ll_tokenizer.vocab_size
         self._grammar_bitmask = llguidance.torch.allocate_token_bitmask(
             1,
-            self.ll_tokenizer.vocab_size,
+            self.vocab_size,
         )
-    
+
+    def is_accepting(self) -> bool:
+        """Whether the grammar is currently in an accepting state."""
+        return self.ll_matcher.is_accepting()
+
+    def apply_token_bitmask(self, logits, bitmask) -> None:
+        """Apply a next-token bitmask to logits in place."""
+        llguidance.torch.apply_token_bitmask_inplace(logits, bitmask)
+
     def reset(self) -> None:
         """Reset matcher state."""
         self.ll_matcher.reset()

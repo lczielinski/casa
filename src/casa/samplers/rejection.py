@@ -18,9 +18,10 @@ class RS(BaseSampler):
     Basic rejection sampling without learning from rejected samples.
     """
     
-    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False):
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
         """Initialize RS sampler.
-        
+
         Args:
             llm: LLM instance.
             grammar: Grammar instance.
@@ -31,7 +32,9 @@ class RS(BaseSampler):
         self.learn_level = 0
         self.constrain_first = False
         self.verbose = verbose
-        
+        self.temperature = temperature
+        self.asap = False
+
     def _filter_generated_text(self, generated_ids):
         if generated_ids[0][-1] == self.llm.tokenizer.eos_token_id:
             return self.llm.tokenizer.decode(generated_ids[0][:-1])
@@ -60,6 +63,8 @@ class RS(BaseSampler):
             device=self.llm.device,
             learn_level=self.learn_level,
             constrain_first=self.constrain_first,
+            temperature=self.temperature,
+            asap=self.asap,
         )
         for sample_idx in range(n_samples):
             n_attempts = 0
@@ -70,7 +75,7 @@ class RS(BaseSampler):
                 
                 try:
                     result = self._generate_one(prompt_ids, logits_processor)
-                    result.n_attempts = n_attempts
+                    result.attempts = n_attempts
                     results.append(result)
                     print_progress(sample_idx + 1, n_samples, n_attempts, max_attempts, self.verbose, timeout=False)
                     
@@ -166,9 +171,10 @@ class ARS(RS):
     Learns from rejected samples to improve efficiency.
     """
     
-    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False):
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
         """Initialize ARS sampler."""
-        super().__init__(llm, grammar, max_new_tokens, verbose)
+        super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.learn_level = 2
 
 
@@ -178,21 +184,20 @@ class RSFT(RS):
     Constrains the first token to valid grammar tokens.
     """
     
-    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False):
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0):
         """Initialize RSFT sampler."""
-        super().__init__(llm, grammar, max_new_tokens, verbose)
+        super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.learn_level = 0
         self.constrain_first = True
 
 
-class CARS(RS):
-    """Constrained Adaptive Rejection Sampling (CARS).
-    
-    Combines adaptive learning with first token constraints for optimal efficiency.
-    """
-    
-    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False):
-        """Initialize CARS sampler."""
-        super().__init__(llm, grammar, max_new_tokens, verbose)
+class _GenerateCARS(RS):
+    """``model.generate``-based CARS implementation, used by CARS(fast=False)."""
+
+    def __init__(self, llm, grammar, max_new_tokens: int = 512, verbose: bool = False,
+                 temperature: float = 1.0, asap: bool = False):
+        super().__init__(llm, grammar, max_new_tokens, verbose, temperature)
         self.learn_level = 3
         self.constrain_first = True
+        self.asap = asap
