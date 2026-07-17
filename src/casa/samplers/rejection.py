@@ -42,20 +42,30 @@ class RS(BaseSampler):
     
     def sample(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         n_samples: int = 1,
         max_attempts: int = 100,
+        prompt_ids: Optional[torch.Tensor] = None,
     ) -> List[SamplingResult]:
         """Generate samples using rejection sampling.
-        
+
         Args:
             prompt: Input prompt.
             n_samples: Number of successful samples to generate.
             max_attempts: Maximum attempts per sample.
+            prompt_ids: Already-tokenized prefix (e.g. the model's own reasoning,
+                ending at its `final` channel header) to continue from instead of
+                a formatted prompt.
         """
-        prompt_ids = self._encode_prompt(prompt)
+        prompt_ids = self._resolve_prompt_ids(prompt, prompt_ids)
         results = []
-        
+
+        # ARS/CARS/ASAP: each accepted program is masked out and never proposed
+        # again. remove_generated() masks the exact token path; `seen` additionally
+        # dedups on canonical text.
+        dedup = self.learn_level >= 2
+        seen: set = set()
+
         # Initialize logits processor
         logits_processor = OracleLogitsProcessor(
             tokenizer=self.llm.tokenizer,
@@ -75,17 +85,37 @@ class RS(BaseSampler):
                 
                 try:
                     result = self._generate_one(prompt_ids, logits_processor)
-                    result.attempts = n_attempts
-                    results.append(result)
-                    print_progress(sample_idx + 1, n_samples, n_attempts, max_attempts, self.verbose, timeout=False)
-                    
-                    success = True
-                    break 
-                    
                 except ValueError:
+                    gen = logits_processor.generated_tokens
+                    if dedup and (gen is None or len(gen) == 0):
+                        # No valid continuation at the root: every program in the
+                        # grammar has already been generated.
+                        if self.verbose:
+                            print(f"[exhausted] {len(results)} distinct program(s)",
+                                  flush=True)
+                        return results
                     continue  # Try again for this sample
-            
+
+                if dedup:
+                    logits_processor.remove_generated()
+                    key = result.text.strip()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                result.attempts = n_attempts
+                results.append(result)
+                print_progress(sample_idx + 1, n_samples, n_attempts, max_attempts, self.verbose, timeout=False)
+
+                success = True
+                break
+
             if not success:
+                if dedup:
+                    if self.verbose:
+                        print(f"[exhausted] {len(results)} distinct program(s); "
+                              f"none new in {max_attempts} attempts", flush=True)
+                    break
                 print_progress(sample_idx + 1, n_samples, n_attempts, max_attempts, self.verbose, timeout=True)
 
         

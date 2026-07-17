@@ -31,6 +31,7 @@ class CARS:
         self.vocab_size = grammar.recognizer.vocab_size
         self.trie = Trie()
         self.logits_process_time = 0.0
+        self._exhausted = False
 
     def _encode_prompt(self, prompt: str) -> List[int]:
         formatted = self.llm.format_prompt(prompt)
@@ -47,18 +48,31 @@ class CARS:
         logits = out.logits[0, -1, :].float()
         return logits, out.past_key_values, len(token_ids)
 
-    def sample(self, prompt: str, n_samples: int = 1,
-               max_attempts: int = 100) -> List[SamplingResult]:
+    def sample(self, prompt: Optional[str] = None, n_samples: int = 1,
+               max_attempts: int = 100,
+               prompt_ids: Optional[torch.Tensor] = None) -> List[SamplingResult]:
         if not self.fast:
             from casa.samplers.rejection import _GenerateCARS
             return _GenerateCARS(
                 self.llm, self.grammar, self.max_new_tokens,
                 verbose=self.verbose, temperature=self.temperature, asap=self.asap,
-            ).sample(prompt, n_samples, max_attempts)
+            ).sample(prompt, n_samples, max_attempts, prompt_ids=prompt_ids)
 
-        prompt_ids = self._encode_prompt(prompt)
+        # prompt_ids lets a caller hand in an already-tokenized prefix (e.g. the
+        # model's own reasoning, ending at its `final` channel header) so the
+        # constrained program is generated as a continuation of it.
+        if prompt_ids is not None:
+            prompt_ids = prompt_ids[0].tolist()
+        elif prompt is not None:
+            prompt_ids = self._encode_prompt(prompt)
+        else:
+            raise ValueError("pass either prompt or prompt_ids")
         results: List[SamplingResult] = []
         self.trie = Trie()
+        self._exhausted = False
+        # Each accepted program is masked out of the trie and never proposed
+        # again; `seen` additionally dedups on canonical text.
+        seen: set = set()
 
         for sample_idx in range(n_samples):
             n_attempts = 0
@@ -66,16 +80,30 @@ class CARS:
             for _ in range(max_attempts):
                 n_attempts += 1
                 result = self._generate_one(prompt_ids)
-                if result is not None:
-                    result.attempts = n_attempts
-                    results.append(result)
-                    print_progress(sample_idx + 1, n_samples, n_attempts,
-                                   max_attempts, self.verbose, timeout=False)
-                    success = True
-                    break
-            if not success:
+                if self._exhausted:
+                    # No valid continuation at the root: every program in the
+                    # grammar has already been generated.
+                    if self.verbose:
+                        print(f"[exhausted] {len(results)} distinct program(s)",
+                              flush=True)
+                    return results
+                if result is None:
+                    continue
+                key = result.text.strip()
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.attempts = n_attempts
+                results.append(result)
                 print_progress(sample_idx + 1, n_samples, n_attempts,
-                               max_attempts, self.verbose, timeout=True)
+                               max_attempts, self.verbose, timeout=False)
+                success = True
+                break
+            if not success:
+                if self.verbose:
+                    print(f"[exhausted] {len(results)} distinct program(s); "
+                          f"none new in {max_attempts} attempts", flush=True)
+                break
 
         return results
 
@@ -90,7 +118,6 @@ class CARS:
         depth = 0
         raw_lps: List[float] = []
         cons_lps: List[float] = []
-        recompute_needed = False
 
         for step in range(self.max_new_tokens):
             is_root = step == 0
@@ -122,7 +149,6 @@ class CARS:
                 node.log_theta = torch.zeros(1, raw.shape[-1])
                 rec.apply_token_bitmask(node.log_theta, rec.filter_vocab())
                 is_new_node = True
-                recompute_needed = True
 
             adjust = self.asap or is_root or not is_new_node
             if adjust:
@@ -132,6 +158,8 @@ class CARS:
 
             probs = torch.softmax(sampling_logits, dim=-1)
             if not torch.isfinite(probs).all() or probs.sum() < 1e-10:
+                if is_root:
+                    self._exhausted = True
                 self.logits_process_time += time.time() - start_time
                 return None
             next_token = torch.multinomial(probs, 1).item()
@@ -141,8 +169,8 @@ class CARS:
 
             if next_token == self.eos_token_id:
                 if rec.try_advance_token_ids(torch.tensor(context + [next_token])):
-                    if recompute_needed:
-                        self._recompute(node, depth, context)
+                    # Mask the accepted program so it is never proposed again.
+                    self._reject(node, depth, context, next_token)
                     self.logits_process_time += time.time() - start_time
                     return self._make_result(context, raw_lps, cons_lps)
                 self._reject(node, depth, context, next_token)
@@ -156,8 +184,8 @@ class CARS:
             self.logits_process_time += time.time() - start_time
             return None
         if rec.is_accepting():
-            if recompute_needed:
-                self._recompute(node, depth, context)
+            # Mask the accepted program so it is never proposed again.
+            self._reject(node, depth, context, context[-1])
             self.logits_process_time += time.time() - start_time
             return self._make_result(context, raw_lps, cons_lps, eos=False)
         self._reject(node, depth, context, context[-1])

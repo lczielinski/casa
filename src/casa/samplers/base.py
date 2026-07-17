@@ -90,3 +90,12 @@ class BaseSampler(ABC):
             add_special_tokens=False,
         ).to(self.llm.device)
         return prompt_ids
+
+    def _resolve_prompt_ids(
+        self, prompt: Optional[str], prompt_ids: Optional[torch.Tensor]
+    ) -> torch.Tensor:
+        if prompt_ids is not None:
+            return prompt_ids.to(self.llm.device)
+        if prompt is None:
+            raise ValueError("pass either prompt or prompt_ids")
+        return self._encode_prompt(prompt)
